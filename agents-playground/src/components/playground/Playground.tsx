@@ -13,6 +13,9 @@ import {
   PlaygroundTile,
 } from "@/components/playground/PlaygroundTile";
 import { useConfig } from "@/hooks/useConfig";
+import { usePeerMetrics } from "@/hooks/usePeerMetrics";
+import { peerMetricsConfig } from "@/config/peerMetrics";
+import { PeerMetricsDebug } from "@/components/PeerMetricsDebug";
 import { TranscriptionTile } from "@/transcriptions/TranscriptionTile";
 import {
   BarVisualizer,
@@ -63,12 +66,72 @@ export default function Playground({
   const [rpcMethod, setRpcMethod] = useState("");
   const [rpcPayload, setRpcPayload] = useState("");
 
+  // Initialize PeerMetrics when room is connected
+  const peerMetrics = usePeerMetrics(room, {
+    apiKey: peerMetricsConfig.apiKey,
+    apiRoot: peerMetricsConfig.apiRoot,
+    userId: localParticipant.identity || 'unknown-user',
+    userName: localParticipant.name || 'Unknown User',
+    conferenceId: name || 'default-conference',
+    conferenceName: name || 'Default Conference',
+    serverId: peerMetricsConfig.defaultServer.serverId,
+    serverName: peerMetricsConfig.defaultServer.serverName,
+    enabled: roomState === ConnectionState.Connected,
+    getStatsInterval: peerMetricsConfig.options.getStatsInterval,
+    debug: peerMetricsConfig.options.debug
+  });
+
   useEffect(() => {
     if (roomState === ConnectionState.Connected) {
       localParticipant.setCameraEnabled(config.settings.inputs.camera);
       localParticipant.setMicrophoneEnabled(config.settings.inputs.mic);
     }
   }, [config, localParticipant, roomState]);
+
+  // Track microphone mute/unmute events
+  useEffect(() => {
+    // Wait for PeerMetrics to be initialized AND have a session
+    // We need a delay to ensure the session token is established
+    if (!peerMetrics?.isInitialized || roomState !== ConnectionState.Connected) {
+      return;
+    }
+
+    // Wait a bit to ensure session is established before sending events
+    const timer = setTimeout(() => {
+      const eventName = config.settings.inputs.mic ? 'microphone-unmuted' : 'microphone-muted';
+      console.log('🎤 Tracking:', eventName);
+      
+      peerMetrics.instance.addEvent({ 
+        eventName 
+      }).catch((err) => {
+        console.error('Failed to track mic event:', err);
+      });
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [config.settings.inputs.mic, peerMetrics?.isInitialized, roomState]);
+
+  // Track camera enable/disable events
+  useEffect(() => {
+    // Wait for PeerMetrics to be initialized AND have a session
+    if (!peerMetrics?.isInitialized || roomState !== ConnectionState.Connected) {
+      return;
+    }
+
+    // Wait a bit to ensure session is established before sending events
+    const timer = setTimeout(() => {
+      const eventName = config.settings.inputs.camera ? 'camera-enabled' : 'camera-disabled';
+      console.log('📹 Tracking:', eventName);
+      
+      peerMetrics.instance.addEvent({ 
+        eventName 
+      }).catch((err) => {
+        console.error('Failed to track camera event:', err);
+      });
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [config.settings.inputs.camera, peerMetrics?.isInitialized, roomState]);
 
   const agentVideoTrack = tracks.find(
     (trackRef) =>
@@ -462,6 +525,7 @@ export default function Playground({
           onConnect(roomState === ConnectionState.Disconnected)
         }
       />
+      <PeerMetricsDebug peerMetrics={peerMetrics} />
       <div
         className={`flex gap-4 py-4 grow w-full selection:bg-${config.settings.theme_color}-900`}
         style={{ height: `calc(100% - ${headerHeight}px)` }}

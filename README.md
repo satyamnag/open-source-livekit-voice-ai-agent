@@ -52,16 +52,95 @@ Make sure that at least the services "agent-playground", "agent-worker", "liveki
 
 ## Monitoring
 
-The solution is build using Prometheus and grafana. The end to end flow is:
-Agent worker → writes metrics to shared temp folder → agent_metrics exposes them → Prometheus scrapes them → Grafana displays them.
+The solution provides **unified monitoring** using **Grafana** with two data sources: **Prometheus** for AI agent metrics and **PostgreSQL** for WebRTC quality metrics from PeerMetrics.
 
-[Agent Worker](./agent-worker/) live metrics are exposed on port 9100 and can be accessed at:
+Simple Architecture
+
 ```
-http://localhost:9100/metrics
+Agent Worker ──▶ Agent Metrics ──▶ Prometheus ──┐
+                                                 │
+PeerMetrics API ──▶ PostgreSQL DB ──────────────┼──▶ Grafana (:3001)
+                                                 
 ```
 
-Grafana is available in [http://localhost:3001](http://localhost:3001) with default user/password: admin/admin
-A default dashboard is setup to visualize basic real time voice agents information.
+**Why this approach?**
+- ✅ Zero intermediary services (no custom exporters)
+- ✅ Real-time data from PostgreSQL (no polling delays)  
+- ✅ More stable (fewer moving parts)
+- ✅ Less resource usage
+- ✅ Native Grafana datasources
+
+### Quick Access
+
+- **Grafana**: [http://localhost:3001](http://localhost:3001) (admin/admin)
+- **Prometheus**: [http://localhost:9090](http://localhost:9090)
+- **PeerMetrics Dashboard**: [http://localhost:8080](http://localhost:8080)
+
+### Enhanced Dashboard
+
+The **"LiveKit Agent Dashboard"** now includes both AI agent metrics and WebRTC quality metrics:
+
+**AI Agent Metrics** (Prometheus):
+- End of Utterance Delay
+- Fast LLM & Full LLM Latency  
+- TTS Latency
+- Total Conversation Latency
+- Active Conversations
+- Total Cost
+- Conversation Turns
+
+**WebRTC Quality Metrics** (PostgreSQL):
+- Round-Trip Time (RTT)
+- Packet Loss (audio/video)
+- Jitter
+- Media Bitrates
+- Media Throughput
+- Video Frame Rate
+- Connection Events & Errors
+
+Access at: **Dashboards → "LiveKit Agent Dashboard"**
+
+### PeerMetrics WebRTC Analytics
+**PeerMetrics** provides specialized WebRTC monitoring and analytics, tracking connection quality, media performance, and network statistics
+
+**Setup Requirements:**
+Before using PeerMetrics, you need to run database migrations for both services. The migrations must be run in the correct order:
+
+**API Migrations (first time only)**
+```bash
+# Start a shell in the API container
+docker compose run peermetrics-api sh
+
+# Inside the container, create models
+python manage.py makemigrations app
+
+# Run PeerMetrics app migrations
+python manage.py migrate app
+
+# Exit the container
+exit
+```
+
+**Web Setup (first time only)**
+```bash
+# Collect static files and create necessary symlinks
+docker compose run peermetrics-web sh -c "python manage.py collectstatic --noinput && ln -sf /app/node_modules /app/static/node_modules && cd /app/static/js/app-dashboard && ln -sf index.min.js index.js && cd /app/static/js/conference && ln -sf index.min.js index.js && cd /app/static/js/participant && ln -sf index.min.js index.js"
+```
+
+Note: These settings persist in the `web_static` volume, so you only need to run this once.
+
+**Access Points:**
+- **PeerMetrics API**: [http://localhost:8081](http://localhost:8081) - API endpoint for metrics collection. You can try [http://localhost:8081/v1/apps](http://localhost:8081/v1/apps) to list your created peermetrics apps
+- **PeerMetrics Dashboard**: [http://localhost:8080](http://localhost:8080) - Web interface for analytics
+
+**Configuration:**
+PeerMetrics integration is configured in [src/config/peerMetrics.ts](./agents-playground/src/config/peerMetrics.ts) and automatically tracks:
+- Connection quality metrics (RTT, packet loss, jitter)
+- Media performance (audio/video bitrates, resolution, frame rates)
+- Network statistics (ICE connection state, candidate pairs)
+- User events (mute/unmute, page visibility changes)
+
+For detailed setup instructions, see [PEERMETRICS_SETUP.md](./agents-playground/PEERMETRICS_SETUP.md).
 
 ## 🙏 Credits
 
@@ -71,4 +150,5 @@ This project is built on top of amazing open-source tools and services:
 - **[Ollama](https://ollama.ai)** - Local LLM inference engine
 - **[Llama](https://llama.meta.com/)** - Open-source large language models by Meta
 - **[Kokoro TTS](https://huggingface.co/hexgrad/Kokoro-82M)** - Open-source text-to-speech model
+- **[PeerMetrics](https://github.com/peermetrics)** - WebRTC monitoring and analytics platform
 - **[Prometheus](https://prometheus.io/) and [Grafana](https://grafana.com/)** - Metrics collection, monitoring and visualization

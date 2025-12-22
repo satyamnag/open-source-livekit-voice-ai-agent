@@ -1,9 +1,53 @@
+# Shared configurations
+x-api-env: &api-env
+  DEBUG: False
+  DJANGO_SETTINGS_MODULE: api.settings
+  SECRET_KEY: secret
+  INIT_TOKEN_SECRET: supersecret
+  SESSION_TOKEN_SECRET: secret
+  WEB_DOMAIN: localhost:8082
+  REDIS_HOST: redis://redis:6379
+  DATABASE_HOST: peermetrics-db
+  DATABASE_PORT: 5432
+  DATABASE_USER: peermetrics
+  DATABASE_PASSWORD: peermetrics
+  DATABASE_NAME: peermetrics
+  CONN_MAX_AGE: 14400
+  POST_CONFERENCE_CLEANUP: True
+
+x-web-env: &web-env
+  DEBUG: True
+  DJANGO_SETTINGS_MODULE: web.settings
+  SECRET_KEY: secret
+  API_ROOT: http://localhost:8081/v1
+  DATABASE_HOST: peermetrics-db
+  DATABASE_PORT: 5432
+  DATABASE_USER: peermetrics
+  DATABASE_PASSWORD: peermetrics
+  DATABASE_NAME: peermetrics
+  CONN_MAX_AGE: 14400
+
+x-api-volumes: &api-volumes
+  - api_static:/app/data
+
+x-web-volumes: &web-volumes
+  - web_static:/app/static
+
+x-api-depends: &api-depends
+  peermetrics-db:
+    condition: service_healthy
+  redis:
+    condition: service_started
+
+x-web-depends: &web-depends
+  - peermetrics-api
+
 networks:
   lknetwork:
   
 services:
   livekit:
-    image: livekit/livekit-server:latest
+    image: livekit/livekit-server:v1.8
     command: --config /etc/livekit.yaml
     restart: unless-stopped
     # network_mode: "host"
@@ -11,7 +55,7 @@ services:
     - "7880:7880"
     - "7881:7881"
     - "7882:7882"
-    - "10000-10100:10000-10100"
+    - "51000-51100:51000-51100"
     volumes:
       - ./livekit.yaml:/etc/livekit.yaml
       - ./certs:/etc/certs
@@ -21,21 +65,25 @@ services:
       - lknetwork
   redis:
     image: redis:7-alpine
-    command: redis-server /etc/redis.conf
+    container_name: redis
     restart: unless-stopped
-    # network_mode: "host"
-    # ports:
-    #   - 6379:6379
-    volumes:
-      - ./redis.conf:/etc/redis.conf
+    ports:
+      - "6379:6379"
     networks:
       - lknetwork
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
   agents-playground:
     build:
       context: ./agents-playground
+      dockerfile: Dockerfile.dev
     volumes:
       - ./agents-playground:/usr/src/app
       - /usr/src/app/node_modules   # Avoid overwriting node_modules
+      - /usr/src/app/.next          # Cache Next.js build output
     env_file:
       - ./agents-playground.yaml  # Load the environment variables from the YAML file
     ports:
@@ -51,58 +99,64 @@ services:
       volumes:
         - ./agent-worker:/app
         - prom_data:/tmp/prometheus_multiproc
+        - hf_cache:/root/.cache/huggingface
       env_file:
         - ./agent-worker/.env
       depends_on:
         - livekit
       networks:
         - lknetwork
-  kokoro:
-    image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
-    ports:
-      - "8880:8880"
-    networks:
-      - lknetwork
-  speaches:
-    image: ghcr.io/speaches-ai/speaches:latest-cpu
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./model_aliases.json:/home/ubuntu/speaches/model_aliases.json
-      - speaches-models:/home/ubuntu/.cache/huggingface
-    environment:
-      - HF_HOME=/home/ubuntu/.cache/huggingface
-      - TRANSFORMERS_CACHE=/home/ubuntu/.cache/huggingface
-    entrypoint: ["/bin/sh", "-c", "echo 'Starting Speaches service...' && uvicorn --factory speaches.main:create_app & echo 'Waiting for server to start...' && until curl -s http://localhost:8000/v1/models/whisper-1 > /dev/null; do echo 'Waiting for server...'; sleep 5; done && echo 'Server is ready, loading model...' && curl -X POST http://localhost:8000/v1/models/whisper-1 && echo 'Model loaded successfully' && wait"]
-    networks:
-      - lknetwork
+  # kokoro:
+  #   image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
+  #   ports:
+  #     - "8880:8880"
+  #   networks:
+  #     - lknetwork
+  # speaches:
+  #   image: ghcr.io/speaches-ai/speaches:latest-cpu
+  #   ports:
+  #     - "8000:8000"
+  #   volumes:
+  #     - ./model_aliases.json:/home/ubuntu/speaches/model_aliases.json
+  #     - speaches-models:/home/ubuntu/.cache/huggingface
+  #   environment:
+  #     - HF_HOME=/home/ubuntu/.cache/huggingface
+  #     - TRANSFORMERS_CACHE=/home/ubuntu/.cache/huggingface
+  #   entrypoint: ["/bin/sh", "-c", "echo 'Starting Speaches service...' && uvicorn --factory speaches.main:create_app & echo 'Waiting for server to start...' && until curl -s http://localhost:8000/v1/models/whisper-1 > /dev/null; do echo 'Waiting for server...'; sleep 5; done && echo 'Server is ready, loading model...' && curl -X POST http://localhost:8000/v1/models/whisper-1 && echo 'Model loaded successfully' && wait"]
+  #   networks:
+  #     - lknetwork
   agent-metrics:
     build: ./agent-metrics
+    container_name: agent-metrics
     ports:
-      - "9100:9100"
+      - "19100:9100"
     volumes:
       - prom_data:/tmp/prometheus_multiproc
     networks:
       - lknetwork
+    restart: unless-stopped
   prometheus:
     image: prom/prometheus
     container_name: prometheus
     ports:
-      - "9090:9090"
+      - "19090:9090"
     volumes:
       - ./prometheus.yaml:/etc/prometheus/prometheus.yaml
-      - prom_data:/tmp/prometheus_multiproc
+      - prom_data_storage:/prometheus
     networks:
       - lknetwork
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command:
       - '--config.file=/etc/prometheus/prometheus.yaml'
-      - '--log.level=debug'
+      - '--log.level=info'
       - '--storage.tsdb.path=/prometheus'
       - '--web.console.libraries=/usr/share/prometheus/console_libraries'
       - '--web.console.templates=/usr/share/prometheus/consoles'
       - '--web.enable-lifecycle'
+    depends_on:
+      - agent-metrics
+    restart: unless-stopped
   grafana:
     image: grafana/grafana
     container_name: grafana
@@ -111,28 +165,7 @@ services:
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
       - GF_SECURITY_ADMIN_USER=admin
-      - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_AUTH_ANONYMOUS_ENABLED=true
-      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
-      - GF_AUTH_DISABLE_LOGIN_FORM=false
-      - GF_AUTH_DISABLE_SIGNOUT_MENU=false
-      - GF_AUTH_DISABLE_REMEMBER_ME=false
-      - GF_AUTH_DISABLE_LOGIN=false
-      - GF_AUTH_DISABLE_GRAVATAR=true
-      - GF_AUTH_DISABLE_BASIC_AUTH=false
-      - GF_AUTH_DISABLE_BRUTE_FORCE_LOGIN_PROTECTION=true
-      - GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION=false
-      - GF_SECURITY_SECRET_KEY=your-secret-key
-      - GF_SECURITY_DISABLE_GRAVATAR=true
-      - GF_SECURITY_COOKIE_SECURE=false
-      - GF_SECURITY_ALLOW_EMBEDDING=true
-      - GF_SECURITY_STRICT_TRANSPORT_SECURITY=false
-      - GF_SECURITY_STRICT_TRANSPORT_SECURITY_MAX_AGE_SECONDS=0
-      - GF_LIVE_ENABLED=true
-      - GF_LIVE_MAX_CONNECTION_LIFETIME=1h
-      - GF_LIVE_HA_MODE=false
-      - GF_LIVE_PUSHER_ENABLED=true
-      - GF_LIVE_PUSHER_BACKEND=memory
+      - GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=grafana-metricsdrilldown-app,grafana-lokiexplore-app,grafana-pyroscope-app,grafana-exploretraces-app
     volumes:
       - grafana-data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning
@@ -140,26 +173,129 @@ services:
       - ./grafana/grafana.ini:/etc/grafana/grafana.ini
     networks:
       - lknetwork
+    depends_on:
+      - prometheus
+      - peermetrics-db
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
       start_period: 30s
-  ollama:
-    image: ollama/ollama:latest
+    restart: unless-stopped
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   ports:
+  #     - "11435:11434"
+  #   volumes:
+  #     - ollama-data:/root/.ollama
+  #   networks:
+  #     - lknetwork
+  #   depends_on:
+  #     - livekit
+  #   entrypoint: /bin/bash -c "ollama serve & sleep 5 && ollama pull llama3.2:1b && wait"
+  nginx:
+    build: ./nginx
+    container_name: nginx
     ports:
-      - "11435:11434"
+      - "8080:8080"   # public web port
+      - "8081:8081"   # (optional) if you want to expose the API separately
+      - "443:443"     # HTTPS for web and WSS to LiveKit
     volumes:
-      - ollama-data:/root/.ollama
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - web_static:/app/web
+      - api_static:/app/api
+      - ./certs:/etc/certs
+    depends_on:
+      - peermetrics-web
+      - peermetrics-api
+      - agents-playground
     networks:
       - lknetwork
-    depends_on:
-      - livekit
-    entrypoint: /bin/bash -c "ollama serve & sleep 5 && ollama pull llama3.2:1b && wait"
+    restart: unless-stopped
+  # peermetrics-api-init:
+  #   NOTE: Migrations should be run manually as per README.md:
+  #   docker compose run peermetrics-api sh
+  #   python manage.py makemigrations app
+  #   python manage.py migrate app
+  #   exit
+  #   The automatic init was causing migration order issues where Django core
+  #   migrations (admin, auth) tried to run before app migrations created the users table.
+
+  peermetrics-api:
+    image: peermetrics/api:latest
+    container_name: peermetrics-api
+    command: "gunicorn api.wsgi:application --bind 0.0.0.0:8081 --log-level debug --reload"
+    environment: *api-env
+    volumes: *api-volumes
+    depends_on: [peermetrics-db, redis]
+    networks: [lknetwork]
+    restart: "on-failure"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8081/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+  peermetrics-db:
+    image: postgres:15-alpine
+    container_name: peermetrics-db
+    environment:
+      - POSTGRES_DB=peermetrics
+      - POSTGRES_USER=peermetrics
+      - POSTGRES_PASSWORD=peermetrics
+    volumes:
+      - peermetrics-db-data:/var/lib/postgresql/data
+    networks:
+      - lknetwork
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U peermetrics -d peermetrics"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+  peermetrics-web-init:
+    image: peermetrics/web:latest
+    container_name: peermetrics-web-init
+    environment: *web-env
+    volumes: *web-volumes
+    depends_on: *web-depends
+    networks: [lknetwork]
+    command: >
+      sh -c "
+        echo 'Checking if static files setup is needed...' &&
+        if [ -f /app/static/.static_files_complete ]; then
+          echo 'Static files already set up, skipping collection.';
+        else
+          echo 'Setting up static files and creating symlinks...' &&
+          python manage.py collectstatic --noinput &&
+          ln -sf /app/node_modules /app/static/node_modules &&
+          cd /app/static/js/app-dashboard && ln -sf index.min.js index.js &&
+          cd /app/static/js/conference && ln -sf index.min.js index.js &&
+          cd /app/static/js/participant && ln -sf index.min.js index.js &&
+          touch /app/static/.static_files_complete &&
+          echo 'Static files setup completed successfully!';
+        fi
+      "
+    restart: "no"
+
+  peermetrics-web:
+    image: peermetrics/web:latest
+    container_name: peermetrics-web
+    command: "gunicorn web.wsgi:application --bind 0.0.0.0:8080 --log-level info"
+    environment: *web-env
+    volumes: *web-volumes
+    depends_on: [peermetrics-web-init, peermetrics-api]
+    networks: [lknetwork]
+    restart: "on-failure"
 
 volumes:
   grafana-data:
   prom_data:
+  prom_data_storage:
+  hf_cache:
   ollama-data:
   speaches-models:
+  peermetrics-db-data:
+  web_static:
+  api_static:
