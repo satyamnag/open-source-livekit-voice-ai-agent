@@ -16,6 +16,7 @@ from livekit.agents import (
 )
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
 from livekit.plugins import deepgram, openai, silero
+from livekit.plugins.turn_detector.english import EnglishModel
 
 logger = logging.getLogger("pre-reseponse-agent")
 
@@ -26,7 +27,8 @@ class PreResponseAgent(Agent):
     def __init__(self):
         super().__init__(
             instructions="You are a helpful assistant, respond in 10 words or less",
-            llm=openai.LLM.with_ollama(model="llama3.2:1b",base_url="http://ollama:11434/v1"),
+            # Replaced Ollama with OpenAI GPT-4o-mini
+            llm=openai.LLM(model="gpt-4o-mini"),
         )
         # We commented out the parallel LLM call to be able to run all the services locally
         # self._fast_llm = openai.LLM.with_ollama(model="llama3.2:1b", base_url="http://ollama:11435/v1")
@@ -80,7 +82,8 @@ async def entrypoint(ctx: JobContext):
         # stt=deepgram.STT(),
         stt=openai.STT(base_url="http://speaches:8000/v1", model="whisper-1"),
         tts=openai.TTS(base_url="http://kokoro:8880/v1", model="kokoro", voice="af_nova"), #lightweight open source tts
-        vad=silero.VAD.load()
+        vad=silero.VAD.load(),
+        turn_detection=EnglishModel(),
     )
 
     usage_collector = metrics.UsageCollector()

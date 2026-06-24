@@ -50,7 +50,6 @@ services:
     image: livekit/livekit-server:v1.8
     command: --config /etc/livekit.yaml
     restart: unless-stopped
-    # network_mode: "host"
     ports:
     - "7880:7880"
     - "7881:7881"
@@ -63,6 +62,7 @@ services:
       - redis
     networks:
       - lknetwork
+
   redis:
     image: redis:7-alpine
     container_name: redis
@@ -76,29 +76,30 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+
   agents-playground:
     build:
       context: ./agents-playground
       dockerfile: Dockerfile.dev
     volumes:
       - ./agents-playground:/usr/src/app
-      - /usr/src/app/node_modules   # Avoid overwriting node_modules
-      - /usr/src/app/.next          # Cache Next.js build output
+      - /usr/src/app/node_modules
+      - /usr/src/app/.next
     env_file:
-      - ./agents-playground.yaml  # Load the environment variables from the YAML file
+      - ./agents-playground.yaml
     ports:
       - "3000:3000"
     depends_on:
       - livekit
     networks:
       - lknetwork
+
   agent-worker:
       build:
         context: ./agent-worker
         dockerfile: Dockerfile
       volumes:
         - ./agent-worker:/app
-        - prom_data:/tmp/prometheus_multiproc
         - hf_cache:/root/.cache/huggingface
       env_file:
         - ./agent-worker/.env
@@ -106,57 +107,34 @@ services:
         - livekit
       networks:
         - lknetwork
-  # kokoro:
-  #   image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
-  #   ports:
-  #     - "8880:8880"
-  #   networks:
-  #     - lknetwork
-  # speaches:
-  #   image: ghcr.io/speaches-ai/speaches:latest-cpu
-  #   ports:
-  #     - "8000:8000"
-  #   volumes:
-  #     - ./model_aliases.json:/home/ubuntu/speaches/model_aliases.json
-  #     - speaches-models:/home/ubuntu/.cache/huggingface
-  #   environment:
-  #     - HF_HOME=/home/ubuntu/.cache/huggingface
-  #     - TRANSFORMERS_CACHE=/home/ubuntu/.cache/huggingface
-  #   entrypoint: ["/bin/sh", "-c", "echo 'Starting Speaches service...' && uvicorn --factory speaches.main:create_app & echo 'Waiting for server to start...' && until curl -s http://localhost:8000/v1/models/whisper-1 > /dev/null; do echo 'Waiting for server...'; sleep 5; done && echo 'Server is ready, loading model...' && curl -X POST http://localhost:8000/v1/models/whisper-1 && echo 'Model loaded successfully' && wait"]
-  #   networks:
-  #     - lknetwork
-  agent-metrics:
-    build: ./agent-metrics
-    container_name: agent-metrics
+
+  # Local open‑source STT (Speaches) – now enabled
+  speaches:
+    image: ghcr.io/speaches-ai/speaches:latest-cpu
     ports:
-      - "19100:9100"
+      - "8000:8000"
     volumes:
-      - prom_data:/tmp/prometheus_multiproc
+      - ./model_aliases.json:/home/ubuntu/speaches/model_aliases.json
+      - speaches-models:/home/ubuntu/.cache/huggingface
+    environment:
+      - HF_HOME=/home/ubuntu/.cache/huggingface
+      - TRANSFORMERS_CACHE=/home/ubuntu/.cache/huggingface
+    entrypoint: ["/bin/sh", "-c", "echo 'Starting Speaches service...' && uvicorn --factory speaches.main:create_app & echo 'Waiting for server to start...' && until curl -s http://localhost:8000/v1/models/whisper-1 > /dev/null; do echo 'Waiting for server...'; sleep 5; done && echo 'Server is ready, loading model...' && curl -X POST http://localhost:8000/v1/models/whisper-1 && echo 'Model loaded successfully' && wait"]
     networks:
       - lknetwork
-    restart: unless-stopped
-  prometheus:
-    image: prom/prometheus
-    container_name: prometheus
+
+  # Local open‑source TTS (Kokoro) – now enabled
+  kokoro:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
     ports:
-      - "19090:9090"
-    volumes:
-      - ./prometheus.yaml:/etc/prometheus/prometheus.yaml
-      - prom_data_storage:/prometheus
+      - "8880:8880"
     networks:
       - lknetwork
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yaml'
-      - '--log.level=info'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
-      - '--web.enable-lifecycle'
-    depends_on:
-      - agent-metrics
-    restart: unless-stopped
+
+  # Removed: agent-metrics, prometheus (no Prometheus metrics collected)
+  # Removed: ollama (replaced by OpenAI API)
+  # Grafana still monitors WebRTC metrics via PostgreSQL
+
   grafana:
     image: grafana/grafana
     container_name: grafana
@@ -174,7 +152,6 @@ services:
     networks:
       - lknetwork
     depends_on:
-      - prometheus
       - peermetrics-db
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1"]
@@ -183,24 +160,14 @@ services:
       retries: 3
       start_period: 30s
     restart: unless-stopped
-  # ollama:
-  #   image: ollama/ollama:latest
-  #   ports:
-  #     - "11435:11434"
-  #   volumes:
-  #     - ollama-data:/root/.ollama
-  #   networks:
-  #     - lknetwork
-  #   depends_on:
-  #     - livekit
-  #   entrypoint: /bin/bash -c "ollama serve & sleep 5 && ollama pull llama3.2:1b && wait"
+
   nginx:
     build: ./nginx
     container_name: nginx
     ports:
-      - "8080:8080"   # public web port
-      - "8081:8081"   # (optional) if you want to expose the API separately
-      - "443:443"     # HTTPS for web and WSS to LiveKit
+      - "8080:8080"
+      - "8081:8081"
+      - "443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - web_static:/app/web
@@ -213,14 +180,6 @@ services:
     networks:
       - lknetwork
     restart: unless-stopped
-  # peermetrics-api-init:
-  #   NOTE: Migrations should be run manually as per README.md:
-  #   docker compose run peermetrics-api sh
-  #   python manage.py makemigrations app
-  #   python manage.py migrate app
-  #   exit
-  #   The automatic init was causing migration order issues where Django core
-  #   migrations (admin, auth) tried to run before app migrations created the users table.
 
   peermetrics-api:
     image: peermetrics/api:latest
@@ -237,6 +196,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+
   peermetrics-db:
     image: postgres:15-alpine
     container_name: peermetrics-db
@@ -254,6 +214,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+
   peermetrics-web-init:
     image: peermetrics/web:latest
     container_name: peermetrics-web-init
@@ -291,10 +252,7 @@ services:
 
 volumes:
   grafana-data:
-  prom_data:
-  prom_data_storage:
   hf_cache:
-  ollama-data:
   speaches-models:
   peermetrics-db-data:
   web_static:
