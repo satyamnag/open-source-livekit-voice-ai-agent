@@ -99,20 +99,22 @@ services:
       - 127.0.0.11
 
   agent-worker:
-      build:
-        context: ./agent-worker
-        dockerfile: Dockerfile
-      volumes:
-        - ./agent-worker:/app
-        - hf_cache:/root/.cache/huggingface
-      env_file:
-        - ./agent-worker/.env
-      depends_on:
-        - livekit
-      networks:
-        - lknetwork
-      dns:
-        - 127.0.0.11
+    build:
+      context: ./agent-worker
+      dockerfile: Dockerfile
+    volumes:
+      - ./agent-worker:/app
+      - hf_cache:/root/.cache/huggingface
+    env_file:
+      - ./agent-worker/.env
+    depends_on:
+      - livekit
+    networks:
+      - lknetwork
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+      - 127.0.0.11
 
   # Local open‑source STT (Speaches) – now enabled
   speaches:
