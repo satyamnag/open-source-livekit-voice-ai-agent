@@ -62,6 +62,8 @@ services:
       - redis
     networks:
       - lknetwork
+    dns:
+      - 127.0.0.11
 
   redis:
     image: redis:7-alpine
@@ -93,6 +95,8 @@ services:
       - livekit
     networks:
       - lknetwork
+    dns:
+      - 127.0.0.11
 
   agent-worker:
       build:
@@ -107,6 +111,8 @@ services:
         - livekit
       networks:
         - lknetwork
+      dns:
+        - 127.0.0.11
 
   # Local open‑source STT (Speaches) – now enabled
   speaches:
@@ -180,6 +186,8 @@ services:
     networks:
       - lknetwork
     restart: unless-stopped
+    dns:
+      - 127.0.0.11
 
   peermetrics-api:
     image: peermetrics/api:latest
