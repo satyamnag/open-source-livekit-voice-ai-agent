@@ -1,0 +1,6 @@
+{
+  "name": "My Codespace",
+  "features": {
+    "ghcr.io/devcontainers/features/gcloud:1": {}
+  }
+}
