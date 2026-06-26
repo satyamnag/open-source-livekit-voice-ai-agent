@@ -22,7 +22,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONPATH=/app
 
 # Download model files
-RUN python fast‑preresponse.py download-files || true
+RUN python fast-preresponse-ollama.py download-files || true
 
 # Run the application
-CMD ["python", "fast‑preresponse.py", "dev"]
+CMD ["python", "fast-preresponse-ollama.py", "dev"]
